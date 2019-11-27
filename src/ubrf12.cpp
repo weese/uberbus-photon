@@ -33,30 +33,6 @@ unsigned int crcUpdate(unsigned int crc, unsigned char serialData)
     return crc;
 }
 
-void ubleds_tx(void)
-{
-    RGB.control(true);
-    RGB.color(255, 0, 0);
-}
-
-void ubleds_txend(void)
-{
-    RGB.control(true);
-    RGB.color(0, 0, 0);
-}
-
-void ubleds_rx(void)
-{
-    RGB.control(true);
-    RGB.color(0, 255, 0);
-}
-
-void ubleds_rxend(void)
-{
-    RGB.control(true);
-    RGB.color(0, 0, 0);
-}
-
 // Log message to cloud, message is a printf-formatted string
 void uart_puts(String message) {
     char msg [50];
@@ -64,11 +40,8 @@ void uart_puts(String message) {
     Particle.publish("DEBUG", msg);
 }
 
-unsigned isr_counter = 42;
-
 void ubrf12_isr()
 {
-    ++isr_counter;
     if(RF12_status.Rx){
         if(RF12_Index < RF12_DataLength){
             ubleds_rx();
@@ -137,16 +110,16 @@ void ubrf12_init(unsigned char channel)
     RF12_channel = channel;
 
     spi_init();
-#ifdef RESET
+#ifdef RF12_RESET_PIN
     volatile unsigned long j;
-    pinMode(RESET, OUTPUT);
-    digitalWrite(RESET, HIGH);
+    pinMode(RF12_RESET_PIN, OUTPUT);
+    digitalWrite(RF12_RESET_PIN, HIGH);
     delay(10);
-    digitalWrite(RESET, LOW);
+    digitalWrite(RF12_RESET_PIN, LOW);
     delay(100);
     // for(j=0;j<900000;j++)
     //     wdt_reset();
-    digitalWrite(RESET, HIGH);
+    digitalWrite(RF12_RESET_PIN, HIGH);
  #endif
     for (i=0; i<100; i++){
         delay(10);			// wait until POR done

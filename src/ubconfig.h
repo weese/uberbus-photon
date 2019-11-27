@@ -2,6 +2,8 @@
 #define _UBCONFIG_H_
 #include <stdint.h>
 
+#define RF_CHANNEL 23
+
 #define UB_MAXMULTICAST 8
 
 typedef uint8_t ubaddress_t;
