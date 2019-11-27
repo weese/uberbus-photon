@@ -15,9 +15,8 @@
 #ifndef __RFM12_H
 #define __RFM12_H
 
-#define RESET A0
+#define RF12_RESET_PIN A0
 #define RF12_IRQ_PIN A1
-extern unsigned isr_counter;
 
 /* config */
 #define RF12_DataLength	50		//RF12 Buffer length

@@ -1,3 +1,9 @@
+/******************************************************/
+//       THIS IS A GENERATED FILE - DO NOT EDIT       //
+/******************************************************/
+
+#include "application.h"
+#line 1 "/Users/weese/Documents/Development/rfm12-server/src/rfm12-server.ino"
 // This #include statement was automatically added by the Particle IDE.
 #include "ubleds.h"
 
@@ -25,6 +31,17 @@
 #include "ub.h"
 
 
+bool isUnknownDevice(char *id, uint8_t addr);
+unsigned char addDevice(char *id);
+void assignAddr(char *id, unsigned char addr);
+void sendStateHass();
+void updateLamp(uint8_t addr);
+void callbackHass(char* topic, uint8_t* payload, unsigned int length);
+bool connectHassOnDemand();
+void loopHASS();
+void setup();
+void loop();
+#line 28 "/Users/weese/Documents/Development/rfm12-server/src/rfm12-server.ino"
 #define MAX_DEVICES 32
 
 #define HASS_BROKER "192.168.100.1"

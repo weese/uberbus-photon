@@ -1,0 +1,34 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "cwd": "${workspaceRoot}",
+            "executable": "./target/rfm12-server.elf",
+            "name": "Debug Microcontroller",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "interface": "swd",
+            "device": "stm32f2x",
+            "configFiles":[
+                ".vscode/interface/stlink-v2.cfg",
+                ".vscode/target/stm32f2x.cfg"
+            ],
+        },
+        {
+            "name": "GDB",
+            "type": "gdb",
+            "request": "launch",
+            "cwd": "${workspaceRoot}",
+            "target": "./target/rfm12-server.elf",
+            "gdbpath" : "arm-none-eabi-gdb.exe",
+            "autorun": [
+                "target remote localhost:3333",
+                "symbol-file ./.pioenvs/nucleo_f303k8/firmware.elf",
+                "monitor reset"
+                ]
+        }    ]
+}
