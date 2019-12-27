@@ -6,7 +6,7 @@
     "configurations": [
         {
             "cwd": "${workspaceRoot}",
-            "executable": "./target/rfm12-server.elf",
+            "executable": "./target/uberbus-photon.elf",
             "name": "Debug Microcontroller",
             "request": "launch",
             "type": "cortex-debug",
@@ -23,7 +23,7 @@
             "type": "gdb",
             "request": "launch",
             "cwd": "${workspaceRoot}",
-            "target": "./target/rfm12-server.elf",
+            "target": "./target/uberbus-photon.elf",
             "gdbpath" : "arm-none-eabi-gdb.exe",
             "autorun": [
                 "target remote localhost:3333",

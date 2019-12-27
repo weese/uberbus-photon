@@ -45,10 +45,13 @@ void ubrf12_isr()
     if(RF12_status.Rx){
         if(RF12_Index < RF12_DataLength){
             ubleds_rx();
-            unsigned char d  = ubrf12_trans(0xB000) & 0x00FF;
-            if(RF12_Index == 0 && d > RF12_DataLength)
-                d = RF12_DataLength;
-            RF12_Data[RF12_Index++]=d;
+            unsigned short w  = ubrf12_trans(0xB000);
+            if (w & 0xFF00) {
+                unsigned char d = w & 0x00FF;
+                if(RF12_Index == 0 && d > RF12_DataLength)
+                    d = RF12_DataLength;
+                RF12_Data[RF12_Index++]=d;
+            }
         }else{
             ubrf12_trans(0x8208);
             ubleds_rxend();
@@ -75,7 +78,7 @@ void ubrf12_isr()
 
 void spi_init(void) {
     //set RFM12B SPI settings
-    SPI.setClockDivider(SPI_CLOCK_DIV256);
+    SPI.setClockDivider(SPI_CLOCK_DIV128);
     SPI.setBitOrder(MSBFIRST);
     SPI.setDataMode(SPI_MODE0);
     // SPI.begin(SPI_MODE_MASTER, A2);
@@ -142,7 +145,7 @@ void ubrf12_init(unsigned char channel)
 
     // picking a non-interrupt enabled pin will prevent proper initialization
     // code thanks to @ScruffR - https://community.particle.io/t/how-to-make-rfm69-work-on-photon-solved-new-library-rfm69-particle/26497/93?u=bloukingfisher
-    pinMode(RF12_IRQ_PIN, INPUT_PULLUP);
+    pinMode(RF12_IRQ_PIN, INPUT);
     // pinMode(A4, INPUT_PULLUP);
     if (!attachInterrupt(RF12_IRQ_PIN, ubrf12_isr, FALLING)) {
         debug("Couldn't attach ISR");

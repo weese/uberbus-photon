@@ -2,6 +2,32 @@
 
 A Particle project named rf12-server
 
+## Schematics
+
+Connect the following pins of the Particle Photon with RFM12B
+
+For debugging connect a logic analyzer as follows
+
+| Description | Logic Analyzer | Photon |
+|-------------|----------------|--------|
+| GND         | GND            | GND    |
+| MOSI        | Channel 0      | A5     |
+| MISO        | Channel 1      | A4     |
+| SCK         | Channel 2      | A3     |
+| Enable      | Channel 3      | A2     |
+| IRQ         | Channel 4      | A1     |
+
+
+For debugging the [muCCC Moodlamp](https://wiki.muc.ccc.de/moodlamp_30)
+
+| Description | Logic Analyzer | MUCCC Lamp |
+|-------------|----------------|------------|
+| GND         | GND            | ISP Pin 6  |
+| MOSI        | Channel 0      | ISP Pin 4  |
+| MISO        | Channel 1      | ISP Pin 1  |
+| SCK         | Channel 2      | ISP Pin 3  |
+
+
 ## Welcome to your project!
 
 Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for rf12-server.
