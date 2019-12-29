@@ -36,7 +36,9 @@
 
 
 // reset the system after 10 seconds if the application is unresponsive
-ApplicationWatchdog wd(10000, System.reset);
+// ApplicationWatchdog wd(10000, System.reset);
+
+SerialDebugOutput debugOutput(57600, ALL_LEVEL);
 
 
 // Log message to cloud, message is a printf-formatted string
@@ -133,26 +135,6 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     ubrf_sendPacket(&packet);
 }
 
-MQTT clientHass(HASS_BROKER, 1883, callbackHass);
-
-void sendStateHass() {
-    moodlamp_t &lamp = deviceList[2];
-
-    StaticJsonBuffer<250> jsonBuffer;
-    JsonObject& root = jsonBuffer.createObject();
-    JsonObject& color = root.createNestedObject("color");
-    color["r"] = lamp.rgb.r;
-    color["g"] = lamp.rgb.g;
-    color["b"] = lamp.rgb.b;
-    root["state"] = (lamp.isOn) ? "ON" : "OFF";
-    root["brightness"] = lamp.brightness;
-
-    char buffer[250];
-    root.printTo(buffer, sizeof(buffer));
-    // debug(buffer);
-    clientHass.publish(HASS_TOPIC_STATE, buffer, true);
-}
-
 void updateLamp(uint8_t addr)
 {
     moodlamp_t &lamp = deviceList[addr];
@@ -182,6 +164,26 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
     updateLamp(addr);
 }
 
+MQTT clientHass(HASS_BROKER, 1883, callbackHass);
+
+void sendStateHass() {
+    moodlamp_t &lamp = deviceList[2];
+
+    StaticJsonBuffer<250> jsonBuffer;
+    JsonObject& root = jsonBuffer.createObject();
+    JsonObject& color = root.createNestedObject("color");
+    color["r"] = lamp.rgb.r;
+    color["g"] = lamp.rgb.g;
+    color["b"] = lamp.rgb.b;
+    root["state"] = (lamp.isOn) ? "ON" : "OFF";
+    root["brightness"] = lamp.brightness;
+
+    char buffer[250];
+    root.printTo(buffer, sizeof(buffer));
+    // debug(buffer);
+    clientHass.publish(HASS_TOPIC_STATE, buffer, true);
+}
+
 bool connectHassOnDemand() {
     if (clientHass.isConnected())
         return true;
@@ -208,6 +210,7 @@ void loopHASS() {
 }
 
 void setup() {
+	// __asm__ ("bkpt");
     ubrf_init();
     connectHassOnDemand();
     debug("Initialized");
@@ -231,7 +234,7 @@ void loop() {
                 case MGT_DISCOVER:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
-                    // it's a lamp wihtout address, so assign one
+                    // it's a lamp without address, so assign one
                     newAddr = addDevice(packet.data + 7);
                     assignAddr(packet.data + 7, newAddr);
                     // send default rgb values to lamp and MQTT server
@@ -251,21 +254,21 @@ void loop() {
                         updateLamp(newAddr);
                         delay(100);
                     }
-                    break;
+//                    break;
                     // We could connect the lamp now, but then it would no longer reveal its ID.
                     // So, if the bridge restarts, all connected lamps would keep their address and the bridge wouldn't know their IDs.
                     // That could lead to address clashes. So we simply let them repeat their names after we set their addresses.
                     //
-                    // packet.header.dest = packet.header.src;
-                    // packet.header.src = UB_ADDRESS_MASTER;
-                    // packet.header.flags = UB_PACKET_MGT | UB_PACKET_NOACK;
-                    // packet.header.cls = UB_CLASS_MOODLAMP;
-                    // packet.header.len = 1;
-                    // packet.data[0] = 'O';
-                    // ubrf_sendPacket(&packet);
-                    // break;
+					packet.header.dest = packet.header.src;
+					packet.header.src = UB_ADDRESS_MASTER;
+					packet.header.flags = UB_PACKET_MGT | UB_PACKET_NOACK;
+					packet.header.cls = UB_CLASS_MOODLAMP;
+					packet.header.len = 1;
+					packet.data[0] = 'O';
+					ubrf_sendPacket(&packet);
+					break;
                 case MGT_ALIVE:
-                    // setColor(addr, rand() & 0xff, rand() & 0xff, rand() & 0xff);
+                    setColor(addr, rgb_t(rand() & 0xff, rand() & 0xff, rand() & 0xff));
                     break;
             }
         }    
