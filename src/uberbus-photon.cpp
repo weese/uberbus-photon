@@ -30,15 +30,16 @@
 #define HASS_BROKER "192.168.100.1"
 #define HASS_ACCESS_USER "mqtt_user"
 #define HASS_ACCESS_PASS "mqtt_pass"
-#define HASS_DEVICE_ID "light/moodlamp"
-#define HASS_TOPIC_STATE "home/" HASS_DEVICE_ID "/status"
-#define HASS_TOPIC_SET "home/" HASS_DEVICE_ID "/set"
+#define HASS_TOPIC_PREFIX "homeassistant/light/"
+#define HASS_TOPIC_STATE_SUFFIX "/status"
+#define HASS_TOPIC_SET_SUFFIX "/set"
+#define HASS_TOPIC_CONFIG_SUFFIX "/config"
 
 
 // reset the system after 10 seconds if the application is unresponsive
 // ApplicationWatchdog wd(10000, System.reset);
 
-SerialDebugOutput debugOutput(57600, ALL_LEVEL);
+SerialDebugOutput debugOutput(115200, ALL_LEVEL);
 
 
 // Log message to cloud, message is a printf-formatted string
@@ -46,6 +47,7 @@ void debug(String message, int value = 0) {
     char msg [500];
     sprintf(msg, message.c_str(), value);
     Particle.publish("DEBUG", msg);
+    Serial.printf("%s\n", msg);
 }
 
 struct ubpacket_t packet;
@@ -72,19 +74,25 @@ struct rgb_t {
     }
 };
 
+enum mqttState_t { unregistered = 0, registered = 1 };
+
 struct moodlamp_t {
     String id;
     rgb_t rgb;
     uint8_t brightness;
     bool isOn;
+    mqttState_t mqttState;
+    uint16_t lastSeen;
     
     moodlamp_t():
         rgb(255, 255, 255),
         brightness(255),
-        isOn(true) {}
+        isOn(true),
+        mqttState(unregistered) {}
 };
 
 moodlamp_t deviceList[MAX_DEVICES];
+String particleDeviceName;
 
 bool isUnknownDevice(char *id, uint8_t addr) {
     return !(addr < MAX_DEVICES && deviceList[addr].id.equals(id));
@@ -107,9 +115,7 @@ unsigned char addDevice(char *id) {
 
 void assignAddr(char *id, unsigned char addr) {
     unsigned char len = strlen(id);
-
-    debug("assign %d -> " + String(id), addr);
-
+    debug("Assign %d -> " + String(id), addr);
     strcpy(packet.data + 2, id);
     packet.header.src = UB_ADDRESS_MASTER;
     packet.header.dest = UB_ADDRESS_BROADCAST;
@@ -118,7 +124,9 @@ void assignAddr(char *id, unsigned char addr) {
     packet.header.len = len + 3;
     packet.data[0] = 'S';
     packet.data[1] = addr;
-    ubrf_sendPacket(&packet);
+    if (ubrf_sendPacket(&packet) == UB_ERROR) {
+        debug("Couldn't send ASSIGN packet");
+    }
 }
 
 void setColor(unsigned char addr, rgb_t const &rgb) {
@@ -132,23 +140,47 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     packet.data[2] = rgb.g;
     packet.data[3] = rgb.b;
     packet.data[4] = '\n';
-    ubrf_sendPacket(&packet);
+    if (ubrf_sendPacket(&packet) == UB_ERROR) {
+        debug("Couldn't send SET_COLOR packet");
+    }
 }
 
 void updateLamp(uint8_t addr)
 {
+    debug("Update %d", addr);
     moodlamp_t &lamp = deviceList[addr];
     setColor(addr, lamp.rgb.nscale8_video(lamp.isOn ? lamp.brightness : 0));
-    // sendStateHass();
+    sendStateHass(addr);
 }
 
 // Callback signature for MQTT subscriptions
 void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
-    /*Parse the command payload.*/
+    // check for topic prefix and consume it
+    String prefix = HASS_TOPIC_PREFIX;
+    prefix += particleDeviceName;
+    prefix += "/";
+
+    if (strncmp(topic, prefix.c_str(), prefix.length()) != 0) {
+        return;
+    }
+    topic += prefix.length();
+
+    // find referenced moodlamp
+    uint8_t addr = 0;
+    for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
+        if ((String(i) + HASS_TOPIC_SET_SUFFIX).equals(topic)) {
+            addr = i;
+            break;
+        }
+    }
+    if (!addr) {
+        return;
+    }
+
+    // parse the command payload
     StaticJsonBuffer<200> jsonBuffer;
     JsonObject& root = jsonBuffer.parseObject((char *)payload);
 
-    uint8_t addr = 2;
     moodlamp_t &lamp = deviceList[addr];
 
     if (root.containsKey("state")) {
@@ -166,8 +198,9 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
 
 MQTT clientHass(HASS_BROKER, 1883, callbackHass);
 
-void sendStateHass() {
-    moodlamp_t &lamp = deviceList[2];
+void sendStateHass(uint8_t addr) {
+    debug("enter sendStateHass %d", addr);
+    moodlamp_t &lamp = deviceList[addr];
 
     StaticJsonBuffer<250> jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
@@ -181,36 +214,105 @@ void sendStateHass() {
     char buffer[250];
     root.printTo(buffer, sizeof(buffer));
     // debug(buffer);
-    clientHass.publish(HASS_TOPIC_STATE, buffer, true);
+    String topic = HASS_TOPIC_PREFIX;
+    topic += particleDeviceName;
+    topic += "/";
+    topic += String(addr);
+    topic += HASS_TOPIC_STATE_SUFFIX;
+    clientHass.publish(topic, buffer, true);
+    debug("exit sendStateHass %d", addr);
+}
+
+void sendDiscoveryToken(uint8_t addr, bool remove = false) {
+    debug("enter sendDiscoveryToken %d", addr);
+    StaticJsonBuffer<300> jsonBuffer;
+    JsonObject& root = jsonBuffer.createObject();
+    String topic = HASS_TOPIC_PREFIX;
+    topic += particleDeviceName;
+    topic += "/";
+    topic += String(addr);
+    char buffer[300] = "";
+    if (!remove) {
+        root["~"] = topic.c_str();
+        root["name"] = deviceList[addr].id.c_str(),
+        root["unique_id"] = deviceList[addr].id.c_str(),
+        root["cmd_t"] = "~" HASS_TOPIC_SET_SUFFIX;
+        root["stat_t"] = "~" HASS_TOPIC_STATE_SUFFIX;
+        root["schema"] = "json";
+        root["rgb"] = true;
+        root["brightness"] = true;
+        root.printTo(buffer, sizeof(buffer));
+    }
+    topic += HASS_TOPIC_CONFIG_SUFFIX;
+    debug(buffer);
+    clientHass.publish(topic, buffer, true);
+    debug("exit sendDiscoveryToken %d", addr);
 }
 
 bool connectHassOnDemand() {
-    if (clientHass.isConnected())
-        return true;
-
-    clientHass.connect(
-        HASS_DEVICE_ID,
-        HASS_ACCESS_USER,
-        HASS_ACCESS_PASS);
-    
-    bool bConn = clientHass.isConnected();
-    if (bConn) {
-        debug("Connected to HASS");
-        clientHass.subscribe(HASS_TOPIC_SET);
+    if (particleDeviceName.length()) {
+        if (clientHass.isConnected()) {
+            return true;
+        }
+        clientHass.connect(
+            particleDeviceName.c_str(),
+            HASS_ACCESS_USER,
+            HASS_ACCESS_PASS);
+        
+        if (clientHass.isConnected()) {
+            debug("Connected to HASS");
+            return true;
+        }
     }
-    return bConn;
+    return false;
 }
 
 void loopHASS() {
     if (!connectHassOnDemand()) {
         return;
     }
+    for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
+        if (!deviceList[i].id.equals("")) {
+            // TODO: implement lastSeen method
+            bool alive = true;
+
+            if (alive != (deviceList[i].mqttState == registered)) {
+                debug("difference for %d", i);
+                String topic = HASS_TOPIC_PREFIX;
+                topic += particleDeviceName;
+                topic += "/";
+                topic += String(i);
+                topic += HASS_TOPIC_SET_SUFFIX;
+
+                if (deviceList[i].mqttState == unregistered) {
+                    if (clientHass.subscribe(topic)) {
+                        sendDiscoveryToken(i);
+                        deviceList[i].mqttState = registered;
+                    }
+                } else {
+                    if (clientHass.unsubscribe(topic)) {
+                        sendDiscoveryToken(i, true);
+                        deviceList[i].mqttState = unregistered;
+                    }
+                }
+            }
+        }
+    }
     // Loop the MQTT client
     clientHass.loop();
 }
 
+// Open a serial terminal and see the device name printed out
+void handlerDeviceName(const char *topic, const char *data) {
+    if (strcmp(topic, "particle/device/name") == 0) {
+        particleDeviceName = data;
+        debug(String("Received device name ") + data);
+    }
+}
+
 void setup() {
-	// __asm__ ("bkpt");
+    Particle.subscribe("particle/device/name", handlerDeviceName);
+    Particle.publish("particle/device/name");
     ubrf_init();
     connectHassOnDemand();
     debug("Initialized");
@@ -231,6 +333,7 @@ void loop() {
             unsigned char addr = packet.header.src;
             unsigned char newAddr;
             switch (packet.data[0]) {
+                // MGT_DISCOVER is sent, if the lamp has no assigned address yet
                 case MGT_DISCOVER:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
@@ -238,23 +341,20 @@ void loop() {
                     newAddr = addDevice(packet.data + 7);
                     assignAddr(packet.data + 7, newAddr);
                     // send default rgb values to lamp and MQTT server
-                        delay(100);
                     updateLamp(newAddr);
-                        delay(100);
                     break;
+                // MGT_IDENTIFY is sent, if the lamp has an address but is not bound to a master
                 case MGT_IDENTIFY:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
                     if (isUnknownDevice(packet.data + 1, addr)) {
                         newAddr = addDevice(packet.data + 1);
-                        // if we haven't the lamp in our records, we need to assign a new address
+                        // if we haven't had the lamp in our records, we need to assign a new address
                         assignAddr(packet.data + 1, newAddr);
-                        delay(100);
                         // send default rgb values to lamp and MQTT server
                         updateLamp(newAddr);
-                        delay(100);
                     }
-//                    break;
+                    break;
                     // We could connect the lamp now, but then it would no longer reveal its ID.
                     // So, if the bridge restarts, all connected lamps would keep their address and the bridge wouldn't know their IDs.
                     // That could lead to address clashes. So we simply let them repeat their names after we set their addresses.
@@ -265,10 +365,13 @@ void loop() {
 					packet.header.cls = UB_CLASS_MOODLAMP;
 					packet.header.len = 1;
 					packet.data[0] = 'O';
-					ubrf_sendPacket(&packet);
+					if (ubrf_sendPacket(&packet) == UB_ERROR) {
+                        debug("Couldn't send BIND packet");
+                    }
 					break;
+                // MGT_ALIVE is sent, if the lamp is bound to a master
                 case MGT_ALIVE:
-                    setColor(addr, rgb_t(rand() & 0xff, rand() & 0xff, rand() & 0xff));
+                    // setColor(addr, rgb_t(rand() & 0xff, rand() & 0xff, rand() & 0xff));
                     break;
             }
         }    

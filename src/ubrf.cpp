@@ -70,7 +70,12 @@ UBSTATUS ubrf_sendPacket(struct ubpacket_t * packet)
         }
         debug(m);
 
-        while (!ubrf12_txfinished()) {}
+	    system_tick_t startTime = millis();
+        while (!ubrf12_txfinished()) {
+            if (millis() - startTime > 2000) {
+                return UB_ERROR;
+            }
+        }
         
         ubrf12_txstart(packet, len);
         return UB_OK;

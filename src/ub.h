@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include "ubconfig.h"
 
-enum UB_ERR_CODE { UB_OK, UB_ERROR };
+enum UB_ERR_CODE { UB_ERROR = 0, UB_OK = 1 };
 typedef uint8_t UBSTATUS;
 
 #define UB_ADDRESS_MASTER       1
