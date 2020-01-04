@@ -9,7 +9,7 @@
 #include "application.h"
 
 // Log message to cloud, message is a printf-formatted string
-void debug(String message, int value = 0);
+#define debug(...) { char msg[500]; sprintf(msg, __VA_ARGS__); Particle.publish("DEBUG", msg); Serial.printf("%s\n", msg); }
 
 
 enum UBRF_STATE {   UBRF_IDLE,
@@ -62,13 +62,18 @@ UBSTATUS ubrf_sendPacket(struct ubpacket_t * packet)
         packet->data[len++] = crc&0xFF;
         len += sizeof(packet->header);
 
-        char b[6];
-        String m = "send: ";
+        char b[5];
+        String m;
         for (unsigned char i = 0; i < len; ++i) {
-            sprintf(b, "%02x ", ((char*)packet)[i]);
-            m += b;
+        	char x = ((char*)packet)[i];
+        	if (x < 32 || x > 127) {
+        		sprintf(b, "\\%02x", x);
+                m += b;
+        	} else {
+        		m += x;
+        	}
         }
-        debug(m);
+        debug("send: %s", m.c_str());
 
 	    system_tick_t startTime = millis();
         while (!ubrf12_txfinished()) {

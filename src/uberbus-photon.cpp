@@ -43,12 +43,7 @@ SerialDebugOutput debugOutput(115200, ALL_LEVEL);
 
 
 // Log message to cloud, message is a printf-formatted string
-void debug(String message, int value = 0) {
-    char msg [500];
-    sprintf(msg, message.c_str(), value);
-    Particle.publish("DEBUG", msg);
-    Serial.printf("%s\n", msg);
-}
+#define debug(...) { char msg[500]; sprintf(msg, __VA_ARGS__); Particle.publish("DEBUG", msg); Serial.printf("%s\n", msg); }
 
 struct ubpacket_t packet;
 
@@ -94,8 +89,8 @@ struct moodlamp_t {
 moodlamp_t deviceList[MAX_DEVICES];
 String particleDeviceName;
 
-bool isUnknownDevice(char *id, uint8_t addr) {
-    return !(addr < MAX_DEVICES && deviceList[addr].id.equals(id));
+bool isKnownDevice(char *id, uint8_t addr) {
+    return addr < MAX_DEVICES && deviceList[addr].id.equals(id);
 }
 
 unsigned char addDevice(char *id) {
@@ -115,8 +110,8 @@ unsigned char addDevice(char *id) {
 
 void assignAddr(char *id, unsigned char addr) {
     unsigned char len = strlen(id);
-    debug("Assign %d -> " + String(id), addr);
-    strcpy(packet.data + 2, id);
+    debug("Assign %d -> %s", addr, id);
+    memmove(packet.data + 2, id, len + 1);
     packet.header.src = UB_ADDRESS_MASTER;
     packet.header.dest = UB_ADDRESS_BROADCAST;
     packet.header.flags = UB_PACKET_MGT | UB_PACKET_NOACK;
@@ -143,6 +138,34 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     if (ubrf_sendPacket(&packet) == UB_ERROR) {
         debug("Couldn't send SET_COLOR packet");
     }
+}
+
+void callbackHass(char* topic, uint8_t* payload, unsigned int length);
+MQTT clientHass(HASS_BROKER, 1883, callbackHass);
+
+void sendStateHass(uint8_t addr) {
+    debug("enter sendStateHass %d", addr);
+    moodlamp_t &lamp = deviceList[addr];
+
+    StaticJsonBuffer<250> jsonBuffer;
+    JsonObject& root = jsonBuffer.createObject();
+    JsonObject& color = root.createNestedObject("color");
+    color["r"] = lamp.rgb.r;
+    color["g"] = lamp.rgb.g;
+    color["b"] = lamp.rgb.b;
+    root["state"] = (lamp.isOn) ? "ON" : "OFF";
+    root["brightness"] = lamp.brightness;
+
+    char buffer[250];
+    root.printTo(buffer, sizeof(buffer));
+    // debug(buffer);
+    String topic = HASS_TOPIC_PREFIX;
+    topic += particleDeviceName;
+    topic += "/";
+    topic += String(addr);
+    topic += HASS_TOPIC_STATE_SUFFIX;
+    clientHass.publish(topic, buffer, true);
+    debug("exit sendStateHass %d", addr);
 }
 
 void updateLamp(uint8_t addr)
@@ -194,33 +217,6 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
         lamp.rgb = rgb_t(rgb["r"], rgb["g"], rgb["b"]);
     }
     updateLamp(addr);
-}
-
-MQTT clientHass(HASS_BROKER, 1883, callbackHass);
-
-void sendStateHass(uint8_t addr) {
-    debug("enter sendStateHass %d", addr);
-    moodlamp_t &lamp = deviceList[addr];
-
-    StaticJsonBuffer<250> jsonBuffer;
-    JsonObject& root = jsonBuffer.createObject();
-    JsonObject& color = root.createNestedObject("color");
-    color["r"] = lamp.rgb.r;
-    color["g"] = lamp.rgb.g;
-    color["b"] = lamp.rgb.b;
-    root["state"] = (lamp.isOn) ? "ON" : "OFF";
-    root["brightness"] = lamp.brightness;
-
-    char buffer[250];
-    root.printTo(buffer, sizeof(buffer));
-    // debug(buffer);
-    String topic = HASS_TOPIC_PREFIX;
-    topic += particleDeviceName;
-    topic += "/";
-    topic += String(addr);
-    topic += HASS_TOPIC_STATE_SUFFIX;
-    clientHass.publish(topic, buffer, true);
-    debug("exit sendStateHass %d", addr);
 }
 
 void sendDiscoveryToken(uint8_t addr, bool remove = false) {
@@ -321,13 +317,18 @@ void setup() {
 void loop() {
     if (ubrf_getPacket(&packet) == UB_OK) {
         unsigned char len = sizeof(struct ubheader_t) + packet.header.len + 2;
-        char b[6];
-        String m = "read: ";
+        char b[5];
+        String m;
         for (unsigned char i = 0; i < len; ++i) {
-            sprintf(b, "%02x ", ((char*)&packet)[i]);
-            m += b;
+        	char x = ((char*)&packet)[i];
+        	if (x < 32 || x > 127) {
+        		sprintf(b, "\\%02x", x);
+                m += b;
+        	} else {
+        		m += x;
+        	}
         }
-        debug(m);
+        debug("read: %s", m.c_str());
         
         if (packet.header.dest == UB_ADDRESS_BROADCAST || packet.header.dest == UB_ADDRESS_MASTER) {
             unsigned char addr = packet.header.src;
@@ -347,7 +348,7 @@ void loop() {
                 case MGT_IDENTIFY:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
-                    if (isUnknownDevice(packet.data + 1, addr)) {
+                    if (!isKnownDevice(packet.data + 1, addr)) {
                         newAddr = addDevice(packet.data + 1);
                         // if we haven't had the lamp in our records, we need to assign a new address
                         assignAddr(packet.data + 1, newAddr);
