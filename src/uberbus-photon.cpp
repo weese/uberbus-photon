@@ -71,21 +71,24 @@ struct rgb_t {
     }
 };
 
+enum presence_t { startup, absent, alive };
 enum mqttState_t { unknown, unregistered, registered };
 
 struct moodlamp_t {
     String id;
+    unsigned long lastSeen;
     rgb_t rgb;
     uint8_t brightness;
     bool isOn;
+    presence_t presence;
     mqttState_t mqttState;
-    unsigned long lastSeen;
     
     moodlamp_t():
         rgb(255, 255, 255),
         brightness(255),
         isOn(true),
         lastSeen(0),
+        presence(startup),
         mqttState(unknown) {}
 };
 
@@ -96,14 +99,32 @@ bool isKnownDevice(char *id, uint8_t addr) {
     return addr < MAX_DEVICES && deviceList[addr].id.equals(id);
 }
 
-unsigned char addDevice(char *id) {
+unsigned char addDevice(char *id, uint8_t preferredAddr = 0) {
+    // look for a name match
     for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
         if (deviceList[i].id.equals(id)) {
             return i;
         }
     }
+
+    if (preferredAddr >= 2 && preferredAddr < MAX_DEVICES) {
+        if (deviceList[preferredAddr].id.equals("")) {
+            deviceList[preferredAddr].id = id;
+            return preferredAddr;
+        }
+    }
+
+    // look for empty slots
     for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
         if (deviceList[i].id.equals("")) {
+            deviceList[i].id = id;
+            return i;
+        }
+    }
+
+    // look for absent lamps
+    for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
+        if (deviceList[i].presence == absent) {
             deviceList[i].id = id;
             return i;
         }
@@ -149,7 +170,6 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length);
 MQTT clientHass(HASS_BROKER, 1883, callbackHass);
 
 void sendStateHass(uint8_t addr) {
-    debug("enter sendStateHass %d", addr);
     moodlamp_t &lamp = deviceList[addr];
 
     StaticJsonBuffer<250> jsonBuffer;
@@ -163,6 +183,7 @@ void sendStateHass(uint8_t addr) {
 
     char buffer[250];
     root.printTo(buffer, sizeof(buffer));
+    debug("send state %d", addr);
     // debug(buffer);
     String topic = HASS_TOPIC_PREFIX;
     topic += particleDeviceName;
@@ -170,7 +191,6 @@ void sendStateHass(uint8_t addr) {
     topic += String(addr);
     topic += HASS_TOPIC_STATE_SUFFIX;
     clientHass.publish(topic, buffer, true);
-    debug("exit sendStateHass %d", addr);
 }
 
 void updateLamp(uint8_t addr)
@@ -225,7 +245,6 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
 }
 
 void sendDiscoveryToken(uint8_t addr, bool remove = false) {
-    debug("enter sendDiscoveryToken %d", addr);
     StaticJsonBuffer<300> jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
     String topic = HASS_TOPIC_PREFIX;
@@ -243,11 +262,13 @@ void sendDiscoveryToken(uint8_t addr, bool remove = false) {
         root["rgb"] = true;
         root["brightness"] = true;
         root.printTo(buffer, sizeof(buffer));
+        debug("Sent alive token %d", addr);
+    } else {
+        debug("Sent absence token %d", addr);
     }
     topic += HASS_TOPIC_CONFIG_SUFFIX;
-    debug(buffer);
+    // debug(buffer);
     clientHass.publish(topic, buffer, true);
-    debug("exit sendDiscoveryToken %d", addr);
 }
 
 bool connectHassOnDemand() {
@@ -268,30 +289,36 @@ bool connectHassOnDemand() {
     return false;
 }
 
+void loopLiveliness() {
+    unsigned long now = millis();
+    for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
+        // wait after starting up to give actually active lamps the chance to send their beacons
+        if ((deviceList[i].presence == alive && (now - deviceList[i].lastSeen) > ALIVE_TIMEOUT) ||
+            (deviceList[i].presence == startup && now > STARTUP_TOLERANCE)) {
+            deviceList[i].presence = absent;
+        }
+    }
+}
+
 void loopHASS() {
     if (!connectHassOnDemand()) {
         return;
     }
-    unsigned long now = millis();
-
     for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
-        bool alive = !deviceList[i].id.equals("") && (now - deviceList[i].lastSeen) < ALIVE_TIMEOUT;
-        mqttState_t state = deviceList[i].mqttState;
-
-        // wait after starting up to give active lamps the chance to send their beacons
-        if (!alive && now < STARTUP_TOLERANCE) {
+        presence_t presence = deviceList[i].presence;
+        if (presence == startup) {
             continue;
         }
 
-        if (state == unknown || alive != (state == registered)) {
-            debug("difference for %d", i);
+        mqttState_t state = deviceList[i].mqttState;
+        if (state == unknown || (presence == alive) != (state == registered)) {
             String topic = HASS_TOPIC_PREFIX;
             topic += particleDeviceName;
             topic += "/";
             topic += String(i);
             topic += HASS_TOPIC_SET_SUFFIX;
 
-            if (alive) {
+            if (presence == alive) {
                 clientHass.subscribe(topic);
                 sendDiscoveryToken(i);
                 deviceList[i].mqttState = registered;
@@ -299,7 +326,6 @@ void loopHASS() {
                 clientHass.unsubscribe(topic);
                 sendDiscoveryToken(i, true);
                 deviceList[i].mqttState = unregistered;
-                deviceList[i].id = "";
             }
         }
     }
@@ -337,7 +363,7 @@ void loop() {
         		m += x;
         	}
         }
-        debug("read: %s", m.c_str());
+        // debug("read: %s", m.c_str());
         
         if (packet.header.dest == UB_ADDRESS_BROADCAST || packet.header.dest == UB_ADDRESS_MASTER) {
             unsigned char addr = packet.header.src;
@@ -358,7 +384,7 @@ void loop() {
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
                     if (!isKnownDevice(packet.data + 1, addr)) {
-                        if (addr = addDevice(packet.data + 1)) {
+                        if (addr = addDevice(packet.data + 1, addr)) {
                             // if we haven't had the lamp in our records, we need to assign a new address
                             assignAddr(packet.data + 1, addr);
                             // send default rgb values to lamp and MQTT server
@@ -386,10 +412,12 @@ void loop() {
                     break;
             }
             if (addr < MAX_DEVICES) {
+                deviceList[addr].presence = alive;
                 deviceList[addr].lastSeen = millis();
             }
         }    
     }
+    loopLiveliness();
     loopHASS();
     ubrf12_rxstart();
 
