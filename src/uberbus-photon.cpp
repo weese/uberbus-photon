@@ -26,6 +26,8 @@
 
 
 #define MAX_DEVICES 32
+#define ALIVE_TIMEOUT 20000
+#define STARTUP_TOLERANCE 30000
 
 #define HASS_BROKER "192.168.100.1"
 #define HASS_ACCESS_USER "mqtt_user"
@@ -69,7 +71,7 @@ struct rgb_t {
     }
 };
 
-enum mqttState_t { unregistered = 0, registered = 1 };
+enum mqttState_t { unknown, unregistered, registered };
 
 struct moodlamp_t {
     String id;
@@ -77,13 +79,14 @@ struct moodlamp_t {
     uint8_t brightness;
     bool isOn;
     mqttState_t mqttState;
-    uint16_t lastSeen;
+    unsigned long lastSeen;
     
     moodlamp_t():
         rgb(255, 255, 255),
         brightness(255),
         isOn(true),
-        mqttState(unregistered) {}
+        lastSeen(0),
+        mqttState(unknown) {}
 };
 
 moodlamp_t deviceList[MAX_DEVICES];
@@ -130,11 +133,13 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     packet.header.flags = UB_PACKET_NOACK;
     packet.header.cls = UB_CLASS_MOODLAMP;
     packet.header.len = 5;
-    packet.data[0] = 'C';
+    packet.data[0] = 'M';
     packet.data[1] = rgb.r;
     packet.data[2] = rgb.g;
     packet.data[3] = rgb.b;
-    packet.data[4] = '\n';
+    packet.data[4] = 1;
+    packet.data[5] = 0;
+    packet.data[6] = '\n';
     if (ubrf_sendPacket(&packet) == UB_ERROR) {
         debug("Couldn't send SET_COLOR packet");
     }
@@ -201,7 +206,7 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
     }
 
     // parse the command payload
-    StaticJsonBuffer<200> jsonBuffer;
+    StaticJsonBuffer<250> jsonBuffer;
     JsonObject& root = jsonBuffer.parseObject((char *)payload);
 
     moodlamp_t &lamp = deviceList[addr];
@@ -267,30 +272,34 @@ void loopHASS() {
     if (!connectHassOnDemand()) {
         return;
     }
+    unsigned long now = millis();
+
     for (unsigned char i = 2; i < MAX_DEVICES; ++i) {
-        if (!deviceList[i].id.equals("")) {
-            // TODO: implement lastSeen method
-            bool alive = true;
+        bool alive = !deviceList[i].id.equals("") && (now - deviceList[i].lastSeen) < ALIVE_TIMEOUT;
+        mqttState_t state = deviceList[i].mqttState;
 
-            if (alive != (deviceList[i].mqttState == registered)) {
-                debug("difference for %d", i);
-                String topic = HASS_TOPIC_PREFIX;
-                topic += particleDeviceName;
-                topic += "/";
-                topic += String(i);
-                topic += HASS_TOPIC_SET_SUFFIX;
+        // wait after starting up to give active lamps the chance to send their beacons
+        if (!alive && now < STARTUP_TOLERANCE) {
+            continue;
+        }
 
-                if (deviceList[i].mqttState == unregistered) {
-                    if (clientHass.subscribe(topic)) {
-                        sendDiscoveryToken(i);
-                        deviceList[i].mqttState = registered;
-                    }
-                } else {
-                    if (clientHass.unsubscribe(topic)) {
-                        sendDiscoveryToken(i, true);
-                        deviceList[i].mqttState = unregistered;
-                    }
-                }
+        if (state == unknown || alive != (state == registered)) {
+            debug("difference for %d", i);
+            String topic = HASS_TOPIC_PREFIX;
+            topic += particleDeviceName;
+            topic += "/";
+            topic += String(i);
+            topic += HASS_TOPIC_SET_SUFFIX;
+
+            if (alive) {
+                clientHass.subscribe(topic);
+                sendDiscoveryToken(i);
+                deviceList[i].mqttState = registered;
+            } else {
+                clientHass.unsubscribe(topic);
+                sendDiscoveryToken(i, true);
+                deviceList[i].mqttState = unregistered;
+                deviceList[i].id = "";
             }
         }
     }
@@ -332,28 +341,29 @@ void loop() {
         
         if (packet.header.dest == UB_ADDRESS_BROADCAST || packet.header.dest == UB_ADDRESS_MASTER) {
             unsigned char addr = packet.header.src;
-            unsigned char newAddr;
             switch (packet.data[0]) {
                 // MGT_DISCOVER is sent, if the lamp has no assigned address yet
                 case MGT_DISCOVER:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
                     // it's a lamp without address, so assign one
-                    newAddr = addDevice(packet.data + 7);
-                    assignAddr(packet.data + 7, newAddr);
-                    // send default rgb values to lamp and MQTT server
-                    updateLamp(newAddr);
+                    if (addr = addDevice(packet.data + 7)) {
+                        assignAddr(packet.data + 7, addr);
+                        // send default rgb values to lamp and MQTT server
+                        updateLamp(addr);
+                    }
                     break;
                 // MGT_IDENTIFY is sent, if the lamp has an address but is not bound to a master
                 case MGT_IDENTIFY:
                     // null-terminate id string
                     packet.data[packet.header.len] = 0;
                     if (!isKnownDevice(packet.data + 1, addr)) {
-                        newAddr = addDevice(packet.data + 1);
-                        // if we haven't had the lamp in our records, we need to assign a new address
-                        assignAddr(packet.data + 1, newAddr);
-                        // send default rgb values to lamp and MQTT server
-                        updateLamp(newAddr);
+                        if (addr = addDevice(packet.data + 1)) {
+                            // if we haven't had the lamp in our records, we need to assign a new address
+                            assignAddr(packet.data + 1, addr);
+                            // send default rgb values to lamp and MQTT server
+                            updateLamp(addr);
+                        }
                     }
                     break;
                     // We could connect the lamp now, but then it would no longer reveal its ID.
@@ -374,6 +384,9 @@ void loop() {
                 case MGT_ALIVE:
                     // setColor(addr, rgb_t(rand() & 0xff, rand() & 0xff, rand() & 0xff));
                     break;
+            }
+            if (addr < MAX_DEVICES) {
+                deviceList[addr].lastSeen = millis();
             }
         }    
     }
