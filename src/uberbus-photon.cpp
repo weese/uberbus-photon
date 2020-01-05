@@ -28,6 +28,7 @@
 #define MAX_DEVICES 32
 #define ALIVE_TIMEOUT 20000
 #define STARTUP_TOLERANCE 30000
+#define RETRANSMISSIONS 3
 
 #define HASS_BROKER "192.168.100.1"
 #define HASS_ACCESS_USER "mqtt_user"
@@ -161,8 +162,10 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     packet.data[4] = 1;
     packet.data[5] = 0;
     packet.data[6] = '\n';
-    if (ubrf_sendPacket(&packet) == UB_ERROR) {
-        debug("Couldn't send SET_COLOR packet");
+    for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
+        if (ubrf_sendPacket(&packet) == UB_ERROR) {
+            debug("Couldn't send SET_COLOR packet %d", i);
+        }
     }
 }
 
