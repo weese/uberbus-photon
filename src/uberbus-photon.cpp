@@ -181,7 +181,8 @@ void setScript(unsigned char addr, uint8_t scriptIndex) {
     packet.header.len = 2;
     packet.data[0] = CMD_SET_SCRIPT;
     packet.data[1] = scriptIndex;
-    packet.data[2] = '\n';
+    packet.data[2] = 0;
+    packet.data[3] = '\n';
     for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
         if (ubrf_sendPacket(&packet) == UB_ERROR) {
             debug("Couldn't send SET_SCRIPT packet %d", i);
@@ -279,7 +280,7 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
     if (root.containsKey("effect")) {
         lamp.effect = -1;
         for (unsigned i = 0; i < sizeof(effectList) / sizeof(effectList[0]); ++i) {
-            if (strcmp(root["state"], effectList[i]) == 0) {
+            if (strcmp(root["effect"], effectList[i]) == 0) {
                 lamp.effect = i;
             }
         }
