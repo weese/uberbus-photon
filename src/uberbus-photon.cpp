@@ -72,6 +72,8 @@ struct rgb_t {
     }
 };
 
+
+char* effectList[8] = {"green_flash", "blinken", "colorchange_rnd", "colorchange_red", "colorchange_red_blue", "green_blink", "police", "red_blink"};
 enum presence_t { startup, absent, alive };
 enum mqttState_t { unknown, unregistered, registered };
 
@@ -80,6 +82,7 @@ struct moodlamp_t {
     unsigned long lastSeen;
     rgb_t rgb;
     uint8_t brightness;
+    int8_t effect;
     bool isOn;
     presence_t presence;
     mqttState_t mqttState;
@@ -87,6 +90,7 @@ struct moodlamp_t {
     moodlamp_t():
         rgb(255, 255, 255),
         brightness(255),
+        effect(-1),
         isOn(true),
         lastSeen(0),
         presence(startup),
@@ -169,13 +173,30 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     }
 }
 
+void setScript(unsigned char addr, uint8_t scriptIndex) {
+    packet.header.src = UB_ADDRESS_MASTER;
+    packet.header.dest = addr;
+    packet.header.flags = UB_PACKET_NOACK;
+    packet.header.cls = UB_CLASS_MOODLAMP;
+    packet.header.len = 2;
+    packet.data[0] = CMD_SET_SCRIPT;
+    packet.data[1] = scriptIndex;
+    packet.data[2] = '\n';
+    for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
+        if (ubrf_sendPacket(&packet) == UB_ERROR) {
+            debug("Couldn't send SET_SCRIPT packet %d", i);
+        }
+    }
+}
+
+
 void callbackHass(char* topic, uint8_t* payload, unsigned int length);
-MQTT clientHass(HASS_BROKER, 1883, callbackHass);
+MQTT clientHass(HASS_BROKER, 1883, callbackHass, 500);
 
 void sendStateHass(uint8_t addr) {
     moodlamp_t &lamp = deviceList[addr];
 
-    StaticJsonBuffer<250> jsonBuffer;
+    StaticJsonBuffer<300> jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
     JsonObject& color = root.createNestedObject("color");
     color["r"] = lamp.rgb.r;
@@ -183,8 +204,13 @@ void sendStateHass(uint8_t addr) {
     color["b"] = lamp.rgb.b;
     root["state"] = (lamp.isOn) ? "ON" : "OFF";
     root["brightness"] = lamp.brightness;
+    if (lamp.effect < 0) {
+        root["effect"] = "none";
+    } else {
+        root["effect"] = effectList[lamp.effect];
+    }
 
-    char buffer[250];
+    char buffer[300];
     root.printTo(buffer, sizeof(buffer));
     debug("send state %d", addr);
     // debug(buffer);
@@ -200,7 +226,11 @@ void updateLamp(uint8_t addr)
 {
     debug("Update %d", addr);
     moodlamp_t &lamp = deviceList[addr];
-    setColor(addr, lamp.rgb.nscale8_video(lamp.isOn ? lamp.brightness : 0));
+    if (lamp.effect < 0 || !lamp.isOn) {
+        setColor(addr, lamp.rgb.nscale8_video(lamp.isOn ? lamp.brightness : 0));
+    } else {
+        setScript(addr, lamp.effect);
+    }
     sendStateHass(addr);
 }
 
@@ -239,22 +269,33 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
     }
     if (root.containsKey("brightness")) {
         lamp.brightness = root["brightness"];
+        lamp.effect = -1;
     }
     if (root.containsKey("color")) {
         JsonObject& rgb = root["color"];
         lamp.rgb = rgb_t(rgb["r"], rgb["g"], rgb["b"]);
+        lamp.effect = -1;
     }
+    if (root.containsKey("effect")) {
+        lamp.effect = -1;
+        for (unsigned i = 0; i < sizeof(effectList) / sizeof(effectList[0]); ++i) {
+            if (strcmp(root["state"], effectList[i]) == 0) {
+                lamp.effect = i;
+            }
+        }
+    }
+
     updateLamp(addr);
 }
 
 void sendDiscoveryToken(uint8_t addr, bool remove = false) {
-    StaticJsonBuffer<300> jsonBuffer;
+    StaticJsonBuffer<500> jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
     String topic = HASS_TOPIC_PREFIX;
     topic += particleDeviceName;
     topic += "/";
     topic += String(addr);
-    char buffer[300] = "";
+    char buffer[400] = "";
     if (!remove) {
         root["~"] = topic.c_str();
         root["name"] = deviceList[addr].id.c_str(),
@@ -264,6 +305,13 @@ void sendDiscoveryToken(uint8_t addr, bool remove = false) {
         root["schema"] = "json";
         root["rgb"] = true;
         root["brightness"] = true;
+        // root["transition"]=2;
+        root["effect"] = true;
+        JsonArray& list = root.createNestedArray("effect_list");
+        list.add("none");
+        for (unsigned i = 0; i < sizeof(effectList) / sizeof(effectList[0]); ++i) {
+            list.add(effectList[i]);
+        }
         root.printTo(buffer, sizeof(buffer));
         debug("Sent alive token %d", addr);
     } else {

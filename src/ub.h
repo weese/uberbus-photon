@@ -12,4 +12,7 @@ typedef uint8_t UBSTATUS;
 #define UB_ADDRESS_BROADCAST     ((1<<sizeof(ubaddress_t)*8)-1)     //all ones
 #define UB_ADDRESS_MULTICAST     (1<<(sizeof(ubaddress_t)*8-1))     //first bit is one
 
+// Moodlamp specific
+#define CMD_SET_SCRIPT          0x21
+
 #endif
