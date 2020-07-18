@@ -137,6 +137,14 @@ unsigned char addDevice(char *id, uint8_t preferredAddr = 0) {
     return 0;
 }
 
+void sendPacket(const char *s) {
+    for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
+        if (ubrf_sendPacket(&packet) == UB_ERROR) {
+            debug("Couldn't send %s packet %d", s, i);
+        }
+    }
+}
+
 void assignAddr(char *id, unsigned char addr) {
     unsigned char len = strlen(id);
     debug("Assign %d -> %s", addr, id);
@@ -159,18 +167,27 @@ void setColor(unsigned char addr, rgb_t const &rgb) {
     packet.header.flags = UB_PACKET_NOACK;
     packet.header.cls = UB_CLASS_MOODLAMP;
     packet.header.len = 5;
-    packet.data[0] = 'M';
+    packet.data[0] = CMD_FADEMS;
     packet.data[1] = rgb.r;
     packet.data[2] = rgb.g;
     packet.data[3] = rgb.b;
     packet.data[4] = 1;
     packet.data[5] = 0;
     packet.data[6] = '\n';
-    for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
-        if (ubrf_sendPacket(&packet) == UB_ERROR) {
-            debug("Couldn't send SET_COLOR packet %d", i);
-        }
-    }
+    sendPacket("SET_COLOR");
+}
+
+void setBrightness(unsigned char addr, uint8_t brightness) {
+    packet.header.src = UB_ADDRESS_MASTER;
+    packet.header.dest = addr;
+    packet.header.flags = UB_PACKET_NOACK;
+    packet.header.cls = UB_CLASS_MOODLAMP;
+    packet.header.len = 2;
+    packet.data[0] = CMD_SET_BRIGHTNESS;
+    packet.data[1] = brightness;
+    packet.data[2] = 0;
+    packet.data[3] = '\n';
+    sendPacket("SET_BRIGHTNESS");
 }
 
 void setScript(unsigned char addr, uint8_t scriptIndex) {
@@ -183,11 +200,20 @@ void setScript(unsigned char addr, uint8_t scriptIndex) {
     packet.data[1] = scriptIndex;
     packet.data[2] = 0;
     packet.data[3] = '\n';
-    for (unsigned char i = 0; i < RETRANSMISSIONS; ++i) {
-        if (ubrf_sendPacket(&packet) == UB_ERROR) {
-            debug("Couldn't send SET_SCRIPT packet %d", i);
-        }
-    }
+    sendPacket("SET_SCRIPT");
+}
+
+void setState(unsigned char addr, uint8_t state) {
+    packet.header.src = UB_ADDRESS_MASTER;
+    packet.header.dest = addr;
+    packet.header.flags = UB_PACKET_NOACK;
+    packet.header.cls = UB_CLASS_MOODLAMP;
+    packet.header.len = 2;
+    packet.data[0] = CMD_SET_STATE;
+    packet.data[1] = state;
+    packet.data[2] = 0;
+    packet.data[3] = '\n';
+    sendPacket("SET_STATE");
 }
 
 
@@ -227,10 +253,15 @@ void updateLamp(uint8_t addr)
 {
     debug("Update %d", addr);
     moodlamp_t &lamp = deviceList[addr];
-    if (lamp.effect < 0 || !lamp.isOn) {
-        setColor(addr, lamp.rgb.nscale8_video(lamp.isOn ? lamp.brightness : 0));
+    if (lamp.isOn) {
+        setBrightness(addr, lamp.brightness);
+        if (lamp.effect < 0) {
+            setColor(addr, lamp.rgb);
+        } else {
+            setScript(addr, lamp.effect);
+        }
     } else {
-        setScript(addr, lamp.effect);
+        setState(addr, STATE_ENTERSLEEP);
     }
     sendStateHass(addr);
 }
