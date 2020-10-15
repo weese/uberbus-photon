@@ -249,19 +249,21 @@ void sendStateHass(uint8_t addr) {
     clientHass.publish(topic, buffer, true);
 }
 
-void updateLamp(uint8_t addr)
+void updateLamp(uint8_t addr, bool updateColor)
 {
     debug("Update %d", addr);
     moodlamp_t &lamp = deviceList[addr];
     if (lamp.isOn) {
         setBrightness(addr, lamp.brightness);
-        if (lamp.effect < 0) {
-            setColor(addr, lamp.rgb);
-        } else {
-            setScript(addr, lamp.effect);
+        if (updateColor) {
+            if (lamp.effect < 0) {
+                setColor(addr, lamp.rgb);
+            } else {
+                setScript(addr, lamp.effect);
+            }
         }
     } else {
-        setState(addr, STATE_ENTERSLEEP);
+        setState(addr, STATE_ENTERSTANDBY);
     }
     sendStateHass(addr);
 }
@@ -295,18 +297,21 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
     JsonObject& root = jsonBuffer.parseObject((char *)payload);
 
     moodlamp_t &lamp = deviceList[addr];
+    
+    bool updateColor = false;
 
     if (root.containsKey("state")) {
         lamp.isOn = (strcmp(root["state"], "ON") == 0);
+        updateColor = true;
     }
     if (root.containsKey("brightness")) {
         lamp.brightness = root["brightness"];
-        lamp.effect = -1;
     }
     if (root.containsKey("color")) {
         JsonObject& rgb = root["color"];
         lamp.rgb = rgb_t(rgb["r"], rgb["g"], rgb["b"]);
         lamp.effect = -1;
+        updateColor = true;
     }
     if (root.containsKey("effect")) {
         lamp.effect = -1;
@@ -315,9 +320,11 @@ void callbackHass(char* topic, uint8_t* payload, unsigned int length) {
                 lamp.effect = i;
             }
         }
+        updateColor = true;
     }
+    debug("on: %d", lamp.isOn);
 
-    updateLamp(addr);
+    updateLamp(addr, updateColor);
 }
 
 void sendDiscoveryToken(uint8_t addr, bool remove = false) {
@@ -459,7 +466,7 @@ void loop() {
                     if (addr = addDevice(packet.data + 7)) {
                         assignAddr(packet.data + 7, addr);
                         // send default rgb values to lamp and MQTT server
-                        updateLamp(addr);
+                        updateLamp(addr, true);
                     }
                     break;
                 // MGT_IDENTIFY is sent, if the lamp has an address but is not bound to a master
@@ -471,7 +478,7 @@ void loop() {
                             // if we haven't had the lamp in our records, we need to assign a new address
                             assignAddr(packet.data + 1, addr);
                             // send default rgb values to lamp and MQTT server
-                            updateLamp(addr);
+                            updateLamp(addr, true);
                         }
                     }
                     break;
@@ -495,6 +502,7 @@ void loop() {
                     break;
             }
             if (addr < MAX_DEVICES) {
+                debug("alive: %x", addr);
                 deviceList[addr].presence = alive;
                 deviceList[addr].lastSeen = millis();
             }
